@@ -73,12 +73,20 @@ app.get('/stream/:fileId', (req, res) => {
 
     // ── Auth checks ───────────────────────────────────────────────────────────
     if (!verifyToken(fileId, token, expires)) {
+        const now = Math.floor(Date.now() / 1000);
+        const exp = parseInt(expires, 10) || 0;
+        console.warn(`[${reqId}] AUTH FAIL: token invalid or expired. expires=${expires} now=${now} diff=${exp - now}s fileId=${fileId}`);
         return res.status(403).json({ error: 'Invalid or expired stream token.', code: 'TOKEN_EXPIRED' });
     }
 
     if (!at) {
+        console.warn(`[${reqId}] AUTH FAIL: missing Google access token (at param)`);
         return res.status(400).json({ error: 'Missing Google access token (at).', code: 'MISSING_AT' });
     }
+
+    // Log token info for debugging (first/last 4 chars only)
+    const atPreview = at.length > 8 ? `${at.slice(0, 4)}...${at.slice(-4)}` : '****';
+    const expiresIn = parseInt(expires, 10) - Math.floor(Date.now() / 1000);
 
     // ── Build Google Drive request ────────────────────────────────────────────
     const driveUrl = new URL(`https://www.googleapis.com/drive/v3/files/${fileId}`);
@@ -96,7 +104,7 @@ app.get('/stream/:fileId', (req, res) => {
 
     activeStreams++;
     totalServed++;
-    console.log(`[${reqId}] START activeStreams=${activeStreams} range=${req.headers.range || 'full'}`);
+    console.log(`[${reqId}] START file=${fileId} at=${atPreview} hmacExpiresIn=${expiresIn}s range=${req.headers.range || 'full'} active=${activeStreams}`);
 
     // ── Track cleanup state (prevent double-cleanup) ──────────────────────────
     let cleaned = false;
@@ -143,8 +151,17 @@ app.get('/stream/:fileId', (req, res) => {
                     errorCode = 'DRIVE_ERROR';
                 }
 
-                console.error(`[${reqId}] Drive error ${status}: ${body.slice(0, 200)}`);
-                res.status(status >= 500 ? 502 : status).json({ error: errorMsg, code: errorCode });
+                // Parse Google's error for detail
+                let driveDetail = '';
+                try {
+                    const parsed = JSON.parse(body);
+                    driveDetail = parsed?.error?.message || parsed?.error_description || '';
+                } catch (_) {
+                    driveDetail = body.slice(0, 300);
+                }
+
+                console.error(`[${reqId}] DRIVE ERROR ${status}: ${errorCode} | ${driveDetail || body.slice(0, 300)}`);
+                res.status(status >= 500 ? 502 : status).json({ error: errorMsg, code: errorCode, driveDetail });
             });
             upstream.on('error', () => {
                 cleanup(`drive-err-${status}`, upstreamReq);
