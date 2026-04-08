@@ -1,27 +1,27 @@
-# ── Stage 1: install deps ──────────────────────────────────────────
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production
+# ── Stage 1: Build Go binary ───────────────────────────────────────────
+FROM golang:1.22-alpine AS builder
+WORKDIR /build
+COPY go.mod ./
+COPY main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o cloudvault-proxy .
 
-# ── Stage 2: runtime ────────────────────────────────────────────────
-FROM node:20-alpine
+# ── Stage 2: Minimal runtime ──────────────────────────────────────────
+FROM alpine:3.19
+RUN apk --no-cache add ca-certificates
 WORKDIR /app
 
 # Non-root for security
 RUN addgroup -S cloudvault && adduser -S cloudvault -G cloudvault
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY --from=builder /build/cloudvault-proxy .
 
 # Koyeb sets PORT automatically; default to 8080
 ENV PORT=8080
-ENV NODE_ENV=production
 
 USER cloudvault
 EXPOSE 8080
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
     CMD wget -qO- http://localhost:8080/health || exit 1
 
-CMD ["node", "index.js"]
+CMD ["./cloudvault-proxy"]

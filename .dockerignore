@@ -6,4 +6,6 @@ npm-debug.log*
 .git
 .gitignore
 README.md
-Procfile
+index.js
+package.json
+package-lock.json
